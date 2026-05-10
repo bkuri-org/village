@@ -1,6 +1,7 @@
 """Village Scribe — knowledge base and audit trail CLI commands."""
 
 import json
+import logging
 from pathlib import Path
 
 import click
@@ -8,6 +9,8 @@ import click
 from village.roles import run_role_chat
 from village.scribe.curate import Curator
 from village.scribe.store import ScribeStore
+
+logger = logging.getLogger(__name__)
 
 
 def _find_wiki_path() -> Path:
@@ -17,6 +20,11 @@ def _find_wiki_path() -> Path:
         if (current / ".git").exists():
             return current / "wiki"
         current = current.parent
+    logger.warning(
+        "No .git directory found from %s — falling back to %s/wiki",
+        cwd,
+        cwd,
+    )
     return cwd / "wiki"
 
 
@@ -78,6 +86,7 @@ def ask(question: str, save: bool, json_output: bool) -> None:
                     "answer": result.answer,
                     "sources": result.sources,
                     "saved": result.saved,
+                    "error": result.error,
                 }
             )
         )
@@ -85,6 +94,9 @@ def ask(question: str, save: bool, json_output: bool) -> None:
         click.echo(result.answer)
         if result.sources:
             click.echo(f"\nSources: {', '.join(result.sources)}")
+
+    if result.error:
+        raise SystemExit(1)
 
 
 @scribe_group.command()

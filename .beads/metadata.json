@@ -1,7 +1,7 @@
 {
-  "database": "jsonl",
+  "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "embedded",
-  "dolt_database": "village",
+  "dolt_database": "bd",
   "project_id": "9125f984-62b5-439b-aaf0-7b5e1607a5f4"
 }
