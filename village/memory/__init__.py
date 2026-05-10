@@ -1,9 +1,12 @@
 """File-based memory store using markdown entries with YAML frontmatter."""
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -137,15 +140,31 @@ class MemoryStore:
     Storage layout:
         <store_path>/
         ├── index.md
+        ├── embeddings.json    (optional, created when semantic search is used)
         └── entries/
             ├── note-001.md
             └── note-002.md
     """
 
-    def __init__(self, store_path: Path) -> None:
+    def __init__(
+        self,
+        store_path: Path,
+        ollama_url: str = "",
+        embed_model: str = "",
+    ) -> None:
         self.path = store_path
         self.entries_dir = store_path / "entries"
         self.index_path = store_path / "index.md"
+        self._embed_cache: EmbeddingCache | None = None
+        if ollama_url:
+            from village.memory.embeddings import EmbeddingCache
+
+            model = embed_model or "nomic-embed-text"
+            self._embed_cache = EmbeddingCache(
+                cache_path=store_path / "embeddings.json",
+                ollama_url=ollama_url,
+                model=model,
+            )
 
     def _ensure_dirs(self) -> None:
         self.entries_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +211,15 @@ class MemoryStore:
         file_path = self.entries_dir / entry.filename()
         file_path.write_text(_entry_to_file_content(entry), encoding="utf-8")
 
+        # Compute embedding in background if semantic search is configured
+        if self._embed_cache is not None:
+            embed_text = f"{entry.title}\n{entry.text}"
+            try:
+                if not self._embed_cache.put_text(entry_id, embed_text):
+                    logger.debug("Failed to embed entry %s — Ollama may be unavailable", entry_id)
+            except Exception:
+                logger.debug("Embedding failed for entry %s", entry_id, exc_info=True)
+
         self.rebuild_index()
         return entry.id
 
@@ -226,6 +254,48 @@ class MemoryStore:
 
         results.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in results[:k]]
+
+    def find_semantic(self, query: str, k: int = 5) -> list[MemoryEntry]:
+        """Semantic search using embedding cosine similarity.
+
+        Falls back to keyword search if embeddings are unavailable.
+        Returns entries sorted by semantic relevance.
+        """
+        if self._embed_cache is None:
+            logger.debug("Semantic search requested but no embedding cache configured")
+            return self.find(query, k=k)
+
+        all_entries = self.all_entries()
+        if not all_entries:
+            return []
+
+        entry_ids = [e.id for e in all_entries]
+        entry_map = {e.id: e for e in all_entries}
+
+        ranked = self._embed_cache.find(query, entry_ids, k=k)
+        if not ranked:
+            logger.debug("No embedding results — falling back to keyword search")
+            return self.find(query, k=k)
+
+        results: list[MemoryEntry] = []
+        for eid, _score in ranked:
+            entry = entry_map.get(eid)
+            if entry is not None:
+                results.append(entry)
+        return results[:k]
+
+    def rebuild_embeddings(self) -> int:
+        """Rebuild the embedding cache for all existing entries.
+
+        Returns the number of entries successfully embedded.
+        Requires ollama_url to be configured in __init__.
+        """
+        if self._embed_cache is None:
+            logger.warning("Cannot rebuild embeddings — no Ollama URL configured")
+            return 0
+
+        entries = {e.id: f"{e.title}\n{e.text}" for e in self.all_entries()}
+        return self._embed_cache.rebuild(entries)
 
     def recent(self, limit: int = 10) -> list[MemoryEntry]:
         """Get most recent entries by created timestamp."""
@@ -279,6 +349,8 @@ class MemoryStore:
         if not file_path.exists():
             return False
         file_path.unlink()
+        if self._embed_cache is not None:
+            self._embed_cache.remove(entry_id)
         self.rebuild_index()
         return True
 
