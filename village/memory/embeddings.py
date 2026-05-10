@@ -9,6 +9,7 @@ Storage layout:
     └── embeddings.json   # {entry_id: [float, ...]}
 """
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -21,6 +22,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 _EMBEDDING_TIMEOUT = 30.0
+
+
+def _hash_text(text: str) -> str:
+    """Compute a stable SHA-256 fingerprint for content staleness detection."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -50,11 +56,17 @@ class EmbeddingCache:
         self.cache_path = cache_path
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
-        self._cache: dict[str, list[float]] = {}
+        # Internal format: {entry_id: {"v": [float...], "h": str}}
+        # Legacy format (pre-fingerprint): {entry_id: [float...]}
+        self._cache: dict[str, dict[str, object]] = {}
         self._loaded = False
 
     def _load(self) -> None:
-        """Lazy-load embeddings from disk."""
+        """Lazy-load embeddings from disk.
+
+        Automatically migrates legacy format {id: [float...]} to
+        fingerprinted format {id: {"v": [float...], "h": str}}.
+        """
         if self._loaded:
             return
         self._loaded = True
@@ -62,8 +74,15 @@ class EmbeddingCache:
             return
         try:
             data = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                self._cache = {k: v for k, v in data.items() if isinstance(v, list)}
+            if not isinstance(data, dict):
+                return
+            for k, v in data.items():
+                if isinstance(v, dict) and "v" in v:
+                    # Already in fingerprinted format
+                    self._cache[k] = v
+                elif isinstance(v, list):
+                    # Legacy format: wrap without fingerprint (stale until synced)
+                    self._cache[k] = {"v": v, "h": ""}
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to load embedding cache %s: %s", self.cache_path, exc)
 
@@ -112,14 +131,33 @@ class EmbeddingCache:
             return None
 
     def get(self, entry_id: str) -> list[float] | None:
-        """Retrieve cached embedding for an entry."""
+        """Retrieve cached embedding vector for an entry."""
         self._load()
-        return self._cache.get(entry_id)
+        entry = self._cache.get(entry_id)
+        if entry is None:
+            return None
+        vec = entry["v"]
+        return vec if isinstance(vec, list) else None
 
-    def put(self, entry_id: str, embedding: list[float]) -> None:
-        """Store embedding for an entry and persist."""
+    def get_hash(self, entry_id: str) -> str:
+        """Retrieve content fingerprint for an entry. Empty string if not fingerprinted."""
         self._load()
-        self._cache[entry_id] = embedding
+        entry = self._cache.get(entry_id)
+        if entry is None:
+            return ""
+        h = entry.get("h", "")
+        return h if isinstance(h, str) else ""
+
+    def put(self, entry_id: str, embedding: list[float], content_hash: str = "") -> None:
+        """Store embedding for an entry and persist.
+
+        Args:
+            entry_id: Entry identifier.
+            embedding: Embedding vector.
+            content_hash: Optional content fingerprint for staleness detection.
+        """
+        self._load()
+        self._cache[entry_id] = {"v": embedding, "h": content_hash}
         self._save()
 
     def remove(self, entry_id: str) -> None:
@@ -129,10 +167,14 @@ class EmbeddingCache:
         self._save()
 
     def put_text(self, entry_id: str, text: str) -> bool:
-        """Compute and cache embedding for text. Returns True on success."""
+        """Compute and cache embedding for text. Returns True on success.
+
+        Stores a content fingerprint (SHA-256 of text) for staleness detection.
+        """
         embedding = self.embed_text(text)
         if embedding is not None:
-            self.put(entry_id, embedding)
+            content_hash = _hash_text(text)
+            self.put(entry_id, embedding, content_hash=content_hash)
             return True
         return False
 
@@ -164,10 +206,10 @@ class EmbeddingCache:
         candidate_ids: list[str] = []
         vectors: list[np.ndarray] = []
         for eid in entry_ids:
-            cached = self._cache.get(eid)
-            if cached is not None:
+            cached_vec = self.get(eid)
+            if cached_vec is not None:
                 candidate_ids.append(eid)
-                vectors.append(np.array(cached, dtype=np.float32))
+                vectors.append(np.array(cached_vec, dtype=np.float32))
 
         if not vectors:
             return []
@@ -186,6 +228,9 @@ class EmbeddingCache:
     def rebuild(self, entries: dict[str, str]) -> int:
         """Rebuild embedding cache from scratch for all entries.
 
+        Stores content fingerprints so subsequent sync calls can detect
+        changes efficiently.
+
         Args:
             entries: Mapping of entry_id -> text content.
 
@@ -199,6 +244,81 @@ class EmbeddingCache:
                 count += 1
         self._save()
         logger.info("Rebuilt embedding cache: %d/%d entries embedded", count, len(entries))
+        return count
+
+    def stale(self, entries: dict[str, str]) -> list[str]:
+        """Return entry IDs whose content has changed since embedding.
+
+        Compares current text hash against stored fingerprint. Entries
+        without a fingerprint (legacy or migrated) are considered stale.
+
+        Args:
+            entries: Mapping of entry_id -> text content.
+
+        Returns:
+            List of entry IDs that need re-embedding.
+        """
+        self._load()
+        stale_ids: list[str] = []
+        for entry_id, text in entries.items():
+            current_hash = _hash_text(text)
+            cached_hash = self.get_hash(entry_id)
+            if cached_hash != current_hash:
+                stale_ids.append(entry_id)
+        return stale_ids
+
+    def missing(self, entries: dict[str, str]) -> list[str]:
+        """Return entry IDs that have no embedding at all.
+
+        Args:
+            entries: Mapping of entry_id -> text content.
+
+        Returns:
+            List of entry IDs without cached embeddings.
+        """
+        self._load()
+        return [eid for eid in entries if eid not in self._cache]
+
+    def sync(self, entries: dict[str, str]) -> int:
+        """Sync embedding cache with current entries.
+
+        Embeds missing entries and re-embeds stale ones (content changed).
+        Removes embeddings for entries that no longer exist.
+
+        Args:
+            entries: Mapping of entry_id -> text content.
+
+        Returns:
+            Number of entries embedded or re-embedded.
+        """
+        self._load()
+
+        # Remove embeddings for deleted entries
+        current_ids = set(entries.keys())
+        orphaned = set(self._cache.keys()) - current_ids
+        for eid in orphaned:
+            self._cache.pop(eid, None)
+        if orphaned:
+            logger.info("Removed %d orphaned embeddings", len(orphaned))
+
+        # Find stale and missing entries
+        stale_ids = set(self.stale(entries))
+        missing_ids = set(self.missing(entries))
+        to_embed = stale_ids | missing_ids
+
+        if not to_embed:
+            logger.debug("All embeddings up to date")
+            return 0
+
+        count = 0
+        for eid in to_embed:
+            text = entries[eid]
+            if self.put_text(eid, text):
+                count += 1
+            else:
+                logger.debug("Failed to sync embedding for %s", eid)
+
+        logger.info("Synced embeddings: %d/%d updated", count, len(to_embed))
         return count
 
     def needs_embedding(self, entry_ids: set[str]) -> list[str]:

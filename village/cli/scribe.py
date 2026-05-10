@@ -169,6 +169,27 @@ def curate(json_output: bool, fix: bool) -> None:
                 click.echo(f"  - {entry}")
 
 
+@scribe_group.command("sync-embeddings")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+def sync_embeddings_cmd(json_output: bool) -> None:
+    """Sync embedding cache with current wiki entries.
+
+    Re-embeds entries whose content has changed, embeds new entries,
+    and removes orphaned embeddings for deleted entries.
+    """
+    wiki_path = _find_wiki_path()
+    store = _make_store(wiki_path)
+    count = store.store.sync_embeddings()
+
+    if json_output:
+        click.echo(json.dumps({"synced": count}))
+    else:
+        if count > 0:
+            click.echo(f"Synced {count} embedding(s)")
+        else:
+            click.echo("All embeddings up to date")
+
+
 @scribe_group.command()
 @click.option("--scope", type=str, help="Filter by scope (feature|fix|investigation|refactoring)")
 @click.option("--total", is_flag=True, help="Return draft count (for statusbar)")

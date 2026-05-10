@@ -215,6 +215,152 @@ class TestAvailableTrue:
         mock_get.assert_called_once_with("http://localhost:11434/api/tags", timeout=30.0)
 
 
+class TestContentFingerprinting:
+    """Tests for content hash-based staleness detection."""
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_put_text_stores_fingerprint(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put_text("e1", "hello world")
+
+        assert cache.get_hash("e1") != ""
+        assert len(cache.get_hash("e1")) == 16  # SHA-256 prefix
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_stale_detects_changed_content(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put_text("e1", "original content")
+
+        # Same content — not stale
+        stale = cache.stale({"e1": "original content"})
+        assert "e1" not in stale
+
+        # Changed content — stale
+        stale = cache.stale({"e1": "updated content"})
+        assert "e1" in stale
+
+    def test_stale_detects_legacy_entries_without_hash(self, tmp_path: Path) -> None:
+        """Entries stored without fingerprint (legacy or direct put) are considered stale."""
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        # put() without content_hash = legacy/no-fingerprint
+        cache.put("e1", [0.1, 0.2, 0.3])
+
+        stale = cache.stale({"e1": "any content"})
+        assert "e1" in stale  # Empty hash != actual hash
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_missing_detects_new_entries(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put_text("e1", "existing")
+
+        missing = cache.missing({"e1": "existing", "e2": "new entry"})
+        assert "e1" not in missing
+        assert "e2" in missing
+
+
+class TestSync:
+    """Tests for EmbeddingCache.sync() incremental embedding update."""
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_sync_embeds_new_entries(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        count = cache.sync({"e1": "text one", "e2": "text two"})
+
+        assert count == 2
+        assert mock_post.call_count == 2
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_sync_skips_up_to_date_entries(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put_text("e1", "text one")
+        initial_calls = mock_post.call_count
+
+        count = cache.sync({"e1": "text one"})
+        assert count == 0
+        assert mock_post.call_count == initial_calls
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_sync_reembeds_changed_content(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put_text("e1", "original")
+        initial_calls = mock_post.call_count
+
+        count = cache.sync({"e1": "updated content"})
+        assert count == 1
+        assert mock_post.call_count == initial_calls + 1
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_sync_removes_orphaned_embeddings(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put_text("e1", "keep me")
+        cache.put_text("e2", "delete me")
+
+        cache.sync({"e1": "keep me"})
+
+        assert cache.get("e1") is not None
+        assert cache.get("e2") is None
+
+    def test_sync_migrates_legacy_cache_format(self, tmp_path: Path) -> None:
+        """Legacy format {id: [vec]} is auto-migrated and entries are marked stale."""
+        import json as json_mod
+
+        legacy_data = {"e1": [0.1, 0.2, 0.3]}
+        (tmp_path / "embeddings.json").write_text(
+            json_mod.dumps(legacy_data), encoding="utf-8"
+        )
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        # Legacy entries should load with empty hash
+        assert cache.get("e1") == [0.1, 0.2, 0.3]
+        assert cache.get_hash("e1") == ""  # No fingerprint
+
+        # They should be detected as stale
+        stale = cache.stale({"e1": "content"})
+        assert "e1" in stale
+
+
 class TestAvailableFalse:
     @patch("village.memory.embeddings.httpx.get")
     def test_ollama_unreachable(self, mock_get: MagicMock) -> None:
@@ -426,6 +572,29 @@ class TestRebuildEmbeddings:
     def test_no_cache_returns_zero(self, tmp_path: Path) -> None:
         store = MemoryStore(tmp_path)
         count = store.rebuild_embeddings()
+        assert count == 0
+
+
+class TestSyncEmbeddings:
+    """Tests for MemoryStore.sync_embeddings() incremental update."""
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_sync_delegates_to_cache(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [[0.5, 0.5]]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        store = MemoryStore(tmp_path, ollama_url="http://localhost:11434")
+        store.put("Auth", "Setup tokens", tags=["auth"])
+        # Second put with same content — sync should skip (same hash)
+        count = store.sync_embeddings()
+        assert count == 0  # Already up to date
+
+    def test_no_cache_returns_zero(self, tmp_path: Path) -> None:
+        store = MemoryStore(tmp_path)
+        count = store.sync_embeddings()
         assert count == 0
 
 
