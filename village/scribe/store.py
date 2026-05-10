@@ -139,13 +139,18 @@ class AskResult:
 
 
 class ScribeStore:
-    def __init__(self, wiki_path: Path) -> None:
+    def __init__(
+        self,
+        wiki_path: Path,
+        ollama_url: str = "",
+        embed_model: str = "",
+    ) -> None:
         self.wiki_path = wiki_path
         self.ingest_dir = wiki_path / "ingest"
         self.processed_dir = wiki_path / "processed"
         self.pages_dir = wiki_path / "pages"
         self.log_path = wiki_path / "log.md"
-        self.store = MemoryStore(wiki_path / "pages")
+        self.store = MemoryStore(wiki_path / "pages", ollama_url=ollama_url, embed_model=embed_model)
 
     def _ensure_dirs(self) -> None:
         self.ingest_dir.mkdir(parents=True, exist_ok=True)
@@ -270,8 +275,12 @@ class ScribeStore:
         )
 
     def ask(self, question: str, save: bool = False) -> AskResult:
-        """Query wiki and synthesize an answer."""
-        hits = self.store.find(question, k=5)
+        """Query wiki and synthesize an answer.
+
+        Uses semantic search (embedding similarity) when an Ollama URL
+        is configured, otherwise falls back to keyword substring search.
+        """
+        hits = self.store.find_semantic(question, k=5)
 
         if not hits:
             entry_count = len(self.store.all_entries())

@@ -113,7 +113,7 @@ def status(
 
     if wiki:
         wiki_path = _find_wiki_path()
-        store = ScribeStore(wiki_path)
+        store = ScribeStore(wiki_path, ollama_url=os.environ.get("VILLAGE_EMBED_URL", "") or os.environ.get("OLLAMA_BASE_URL", ""))
 
         entries = store.store.all_entries()
         log_path = wiki_path / "log.md"
@@ -505,7 +505,7 @@ def monitor(interval: int) -> None:
     from village.scribe.monitor import Monitor
 
     wiki_path = _find_wiki_path()
-    store = ScribeStore(wiki_path)
+    store = ScribeStore(wiki_path, ollama_url=os.environ.get("VILLAGE_EMBED_URL", "") or os.environ.get("OLLAMA_BASE_URL", ""))
     mon = Monitor(wiki_path, store, poll_interval=interval)
 
     click.echo(f"Monitoring {wiki_path / 'ingest'} every {interval}s (Ctrl+C to stop)")

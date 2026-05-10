@@ -13,6 +13,23 @@ from village.scribe.store import ScribeStore
 logger = logging.getLogger(__name__)
 
 
+def _get_ollama_url() -> str:
+    """Get Ollama embedding URL from environment.
+
+    Checks VILLAGE_EMBED_URL first (explicit), then falls back to OLLAMA_BASE_URL.
+    Returns empty string if neither is set — semantic search will be disabled.
+    """
+    import os
+
+    return os.environ.get("VILLAGE_EMBED_URL", "") or os.environ.get("OLLAMA_BASE_URL", "")
+
+
+def _make_store(wiki_path: Path) -> ScribeStore:
+    """Create a ScribeStore with optional embedding support."""
+    ollama_url = _get_ollama_url()
+    return ScribeStore(wiki_path, ollama_url=ollama_url)
+
+
 def _find_wiki_path() -> Path:
     cwd = Path.cwd()
     current = cwd
@@ -44,7 +61,7 @@ def scribe_group(ctx: click.Context) -> None:
 def fetch(source: str, raw: bool, json_output: bool) -> None:
     """Ingest a URL or file into the knowledge base."""
     wiki_path = _find_wiki_path()
-    store = ScribeStore(wiki_path)
+    store = _make_store(wiki_path)
 
     result = store.see(source, raw=raw)
 
@@ -75,7 +92,7 @@ def fetch(source: str, raw: bool, json_output: bool) -> None:
 def ask(question: str, save: bool, json_output: bool) -> None:
     """Query the knowledge base and synthesize an answer."""
     wiki_path = _find_wiki_path()
-    store = ScribeStore(wiki_path)
+    store = _make_store(wiki_path)
 
     result = store.ask(question, save=save)
 
@@ -106,7 +123,7 @@ def curate(json_output: bool, fix: bool) -> None:
     """Health check and maintain the knowledge base."""
     wiki_path = _find_wiki_path()
     project_root = wiki_path.parent
-    store = ScribeStore(wiki_path)
+    store = _make_store(wiki_path)
     curator = Curator(store.store, wiki_path, project_root)
 
     result = curator.curate(fix=fix)
