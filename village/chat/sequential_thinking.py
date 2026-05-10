@@ -110,7 +110,11 @@ def generate_task_breakdown(
         return _st_aot_light_strategy(baseline, config, tasks_state, llm_client)
 
     # Default sequential strategy (for "sequential" and "atomic")
-    prompt = _build_sequential_thinking_prompt(baseline, tasks_state)
+    prompt = _build_sequential_thinking_prompt(
+        baseline, tasks_state,
+        min_tasks=config.task_breakdown.min_tasks,
+        max_tasks=config.task_breakdown.max_tasks,
+    )
 
     logger.info(f"Invoking {strategy} task breakdown via LLM")
 
@@ -129,6 +133,8 @@ def generate_task_breakdown(
 def _build_sequential_thinking_prompt(
     baseline: BaselineReport,
     tasks_state: Optional[str] = None,
+    min_tasks: int = 3,
+    max_tasks: int = 7,
 ) -> str:
     """
     Build prompt for Sequential Thinking invocation.
@@ -172,8 +178,8 @@ Use this context to:
 - Reference related tasks where appropriate
 """
 
-    prompt += """
- 1. Break down into 3-7 concrete, actionable tasks
+    prompt += f"""
+ 1. Break down into {min_tasks}-{max_tasks} concrete, actionable tasks
 2. Evaluate if the user's title is precise and descriptive enough
 3. If the title is vague, suggest a more specific/recognizable alternative
 4. Each task should be independently completable
@@ -397,6 +403,7 @@ IMPORTANT: Use """
 def _build_aot_light_atomization_prompt(
     analysis: dict[str, object],
     baseline: BaselineReport,
+    max_effort_hours: int = 4,
 ) -> str:
     """
     Build Phase 2 prompt for Atom of Thoughts (AoT-light) atomization.
@@ -427,9 +434,9 @@ USER PROVIDED:
         prompt += f"  Tags: {', '.join(baseline.tags)}\n"
 
     prompt += (
-        """
+        f"""
 TASK:
-1. Create atomic, queueable tasks (each should be completable in 1-4 hours)
+1. Create atomic, queueable tasks (each should be completable in 1-{max_effort_hours} hours)
 2. Each task should have clear, independent scope
 3. Avoid mixing concerns across tasks
 4. Ensure tasks can be executed independently
@@ -520,7 +527,10 @@ def _st_aot_light_strategy(
         analysis = {"analysis": {}, "summary": analysis_response[:200]}
 
     logger.info("Phase 2: Running AoT-light for atomic task creation")
-    atomization_prompt = _build_aot_light_atomization_prompt(analysis, baseline)
+    atomization_prompt = _build_aot_light_atomization_prompt(
+        analysis, baseline,
+        max_effort_hours=config.task_breakdown.max_effort_hours,
+    )
 
     response = llm_client.call(
         atomization_prompt,

@@ -52,6 +52,63 @@ class TestTaskBreakdownConfig:
         config = TaskBreakdownConfig(strategy="sequential".lower())
         assert config.strategy == "sequential"
 
+    def test_default_granularity(self):
+        """Test default granularity bounds."""
+        config = TaskBreakdownConfig()
+        assert config.min_tasks == 3
+        assert config.max_tasks == 7
+        assert config.max_effort_hours == 4
+
+    def test_can_override_granularity(self):
+        """Test overriding granularity bounds."""
+        config = TaskBreakdownConfig(min_tasks=1, max_tasks=3, max_effort_hours=2)
+        assert config.min_tasks == 1
+        assert config.max_tasks == 3
+        assert config.max_effort_hours == 2
+
+    def test_min_max_swap_when_inverted(self, monkeypatch: pytest.MonkeyPatch):
+        """Test that min/max are swapped if min > max."""
+        monkeypatch.delenv("VILLAGE_TASK_MIN", raising=False)
+        monkeypatch.delenv("VILLAGE_TASK_MAX", raising=False)
+        monkeypatch.delenv("VILLAGE_TASK_MAX_EFFORT_HOURS", raising=False)
+        config = TaskBreakdownConfig.from_env_and_config(
+            {"task_breakdown.min_tasks": "10", "task_breakdown.max_tasks": "2"}
+        )
+        assert config.min_tasks == 2
+        assert config.max_tasks == 10
+
+    def test_from_env_granularity(self, monkeypatch: pytest.MonkeyPatch):
+        """Test granularity from env vars."""
+        monkeypatch.setenv("VILLAGE_TASK_MIN", "2")
+        monkeypatch.setenv("VILLAGE_TASK_MAX", "5")
+        monkeypatch.setenv("VILLAGE_TASK_MAX_EFFORT_HOURS", "8")
+        config = TaskBreakdownConfig.from_env_and_config({})
+        assert config.min_tasks == 2
+        assert config.max_tasks == 5
+        assert config.max_effort_hours == 8
+
+    def test_from_config_dict_granularity(self, monkeypatch: pytest.MonkeyPatch):
+        """Test granularity from config dict."""
+        monkeypatch.delenv("VILLAGE_TASK_MIN", raising=False)
+        monkeypatch.delenv("VILLAGE_TASK_MAX", raising=False)
+        monkeypatch.delenv("VILLAGE_TASK_MAX_EFFORT_HOURS", raising=False)
+        config = TaskBreakdownConfig.from_env_and_config(
+            {"task_breakdown.min_tasks": "1", "task_breakdown.max_tasks": "4", "task_breakdown.max_effort_hours": "2"}
+        )
+        assert config.min_tasks == 1
+        assert config.max_tasks == 4
+        assert config.max_effort_hours == 2
+
+    def test_env_overrides_config_dict(self, monkeypatch: pytest.MonkeyPatch):
+        """Test env vars take priority over config dict."""
+        monkeypatch.setenv("VILLAGE_TASK_MIN", "1")
+        monkeypatch.setenv("VILLAGE_TASK_MAX", "2")
+        config = TaskBreakdownConfig.from_env_and_config(
+            {"task_breakdown.min_tasks": "5", "task_breakdown.max_tasks": "10"}
+        )
+        assert config.min_tasks == 1
+        assert config.max_tasks == 2
+
 
 class TestConfigWithTaskBreakdown:
     """Test TaskBreakdownConfig integrated into Config."""
