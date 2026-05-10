@@ -223,16 +223,36 @@ class ExtensionConfig:
 
 @dataclass
 class TaskBreakdownConfig:
-    """Task breakdown strategy configuration."""
+    """Task breakdown strategy and granularity configuration."""
 
     strategy: str = "st_aot_light"
+    min_tasks: int = 3
+    max_tasks: int = 7
+    max_effort_hours: int = 4
 
     @classmethod
     def from_env_and_config(cls, config: dict[str, str]) -> "TaskBreakdownConfig":
         strategy = _parse_str(
             _env_or_config("VILLAGE_TASK_BREAKDOWN_STRATEGY", config, "TASK_BREAKDOWN.STRATEGY"), "st_aot_light"
         )
-        return cls(strategy=strategy)
+        min_tasks = _parse_int(
+            os.environ.get("VILLAGE_TASK_MIN")
+            or config.get("task_breakdown.min_tasks", ""),
+            3,
+        )
+        max_tasks = _parse_int(
+            os.environ.get("VILLAGE_TASK_MAX")
+            or config.get("task_breakdown.max_tasks", ""),
+            7,
+        )
+        max_effort_hours = _parse_int(
+            os.environ.get("VILLAGE_TASK_MAX_EFFORT_HOURS")
+            or config.get("task_breakdown.max_effort_hours", ""),
+            4,
+        )
+        if min_tasks > max_tasks:
+            min_tasks, max_tasks = max_tasks, min_tasks
+        return cls(strategy=strategy, min_tasks=min_tasks, max_tasks=max_tasks, max_effort_hours=max_effort_hours)
 
 
 @dataclass
