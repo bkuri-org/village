@@ -127,6 +127,7 @@ class IngestResult:
     tags: list[str] = field(default_factory=list)
     status: str = "success"
     error: str = ""
+    distill_failed: bool = False
 
 
 @dataclass
@@ -134,6 +135,7 @@ class AskResult:
     answer: str
     sources: list[str]
     saved: bool
+    error: str = ""
 
 
 class ScribeStore:
@@ -156,6 +158,10 @@ class ScribeStore:
         html = response.text
         downloaded = trafilatura.bare_extraction(html, url=url)
         if downloaded is None:
+            logger.warning(
+                "Trafilatura extraction failed for %s — falling back to raw HTML",
+                url,
+            )
             return url, html
         if isinstance(downloaded, dict):
             title = downloaded.get("title") or url
@@ -165,9 +171,10 @@ class ScribeStore:
             text = getattr(downloaded, "text", None) or ""
         return title, text
 
-    def _distill(self, text: str, title: str) -> str:
+    def _distill(self, text: str, title: str) -> tuple[str, bool]:
+        """Distill text. Returns (processed_text, distill_failed)."""
         if len(text) <= MAX_DISTILL_SIZE:
-            return text
+            return text, False
 
         try:
             from village.config import get_config
@@ -186,21 +193,24 @@ class ScribeStore:
                 "Do not include preamble — output only the distilled content."
             )
             result = llm.call(prompt, system_prompt=system_prompt, max_tokens=2048, timeout=60)
-            return result.strip()
+            return result.strip(), False
         except Exception:
             logger.warning("LLM distillation failed, falling back to truncation", exc_info=True)
-            return f"{text[:MAX_DISTILL_SIZE]}\n\n[Content truncated — original was {len(text)} chars]"
+            truncated = f"{text[:MAX_DISTILL_SIZE]}\n\n[Content truncated — original was {len(text)} chars]"
+            return truncated, True
 
-    def _extract_file(self, path: Path, raw: bool = False) -> tuple[str, str]:
+    def _extract_file(self, path: Path, raw: bool = False) -> tuple[str, str, bool]:
         text = path.read_text(encoding="utf-8")
         title = path.stem
+        distill_failed = False
         if not raw:
-            text = self._distill(text, title)
-        return title, text
+            text, distill_failed = self._distill(text, title)
+        return title, text, distill_failed
 
-    def _extract(self, source: str, raw: bool = False) -> tuple[str, str]:
+    def _extract(self, source: str, raw: bool = False) -> tuple[str, str, bool]:
         if source.startswith("http://") or source.startswith("https://"):
-            return self._extract_url(source)
+            title, text = self._extract_url(source)
+            return title, text, False
         path = Path(source)
         if path.exists():
             return self._extract_file(path, raw=raw)
@@ -221,7 +231,7 @@ class ScribeStore:
     def see(self, source: str, raw: bool = False) -> IngestResult:
         self._ensure_dirs()
         try:
-            title, text = self._extract(source, raw=raw)
+            title, text, distill_failed = self._extract(source, raw=raw)
         except Exception as exc:
             return IngestResult(
                 entry_id="",
@@ -247,8 +257,8 @@ class ScribeStore:
                 if ingest_file.exists():
                     processed_file = self.processed_dir / source_path.name
                     ingest_file.rename(processed_file)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning("Failed to move %s to processed: %s", ingest_file, exc)
 
         return IngestResult(
             entry_id=entry_id,
@@ -256,6 +266,7 @@ class ScribeStore:
             tags=tags,
             status="success",
             error="",
+            distill_failed=distill_failed,
         )
 
     def ask(self, question: str, save: bool = False) -> AskResult:
@@ -263,7 +274,27 @@ class ScribeStore:
         hits = self.store.find(question, k=5)
 
         if not hits:
-            return AskResult(answer="No relevant pages found.", sources=[], saved=False)
+            entry_count = len(self.store.all_entries())
+            if entry_count == 0:
+                return AskResult(
+                    answer=(
+                        "Knowledge base is empty. "
+                        "Run 'village scribe fetch <source>' to add content."
+                    ),
+                    sources=[],
+                    saved=False,
+                    error="empty_wiki",
+                )
+            return AskResult(
+                answer=(
+                    "No pages matched your query. "
+                    "Try different keywords or check what's available "
+                    "with 'village scribe curate'."
+                ),
+                sources=[],
+                saved=False,
+                error="no_matches",
+            )
 
         context_parts = []
         source_ids = []

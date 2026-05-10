@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -126,18 +127,21 @@ class TestAskWithNoMatches:
 
         result = elder.ask("quantum physics")
 
-        assert result.answer == "No relevant pages found."
+        assert "No pages matched your query" in result.answer
         assert result.sources == []
         assert result.saved is False
+        assert result.error == "no_matches"
 
 
 class TestAskWithEmptyWiki:
-    def test_returns_no_relevant_on_empty_wiki(self, tmp_path: Path) -> None:
+    def test_returns_empty_wiki_message(self, tmp_path: Path) -> None:
         elder = ScribeStore(tmp_path / "wiki")
         result = elder.ask("anything")
 
-        assert result.answer == "No relevant pages found."
+        assert "Knowledge base is empty" in result.answer
+        assert "village scribe fetch" in result.answer
         assert result.sources == []
+        assert result.error == "empty_wiki"
 
 
 class TestAskWithSave:
@@ -184,24 +188,33 @@ class TestDistillUnderThreshold:
     def test_returns_text_as_is_when_under_threshold(self, tmp_path: Path) -> None:
         store = ScribeStore(tmp_path / "wiki")
         short_text = "Short content"
-        result = store._distill(short_text, "test-doc")
-        assert result == short_text
+        text, failed = store._distill(short_text, "test-doc")
+        assert text == short_text
+        assert failed is False
 
     def test_returns_text_as_is_at_exact_threshold(self, tmp_path: Path) -> None:
         store = ScribeStore(tmp_path / "wiki")
-        text = "a" * MAX_DISTILL_SIZE
-        result = store._distill(text, "test-doc")
-        assert result == text
+        text_input = "a" * MAX_DISTILL_SIZE
+        text, failed = store._distill(text_input, "test-doc")
+        assert text == text_input
+        assert failed is False
 
 
 class TestDistillWithLLMUnavailable:
     def test_falls_back_to_truncation(self, tmp_path: Path) -> None:
         store = ScribeStore(tmp_path / "wiki")
         long_text = "a" * (MAX_DISTILL_SIZE + 100)
-        result = store._distill(long_text, "test-doc")
-        assert len(result) < len(long_text)
-        assert "Content truncated" in result
-        assert f"original was {len(long_text)} chars" in result
+
+        with (
+            patch("village.config.get_config") as mock_get_config,
+            patch("village.llm.factory.get_llm_client", side_effect=RuntimeError("LLM unavailable")),
+        ):
+            text, failed = store._distill(long_text, "test-doc")
+
+        assert len(text) < len(long_text)
+        assert "Content truncated" in text
+        assert f"original was {len(long_text)} chars" in text
+        assert failed is True
 
 
 class TestDistillWithLLMSuccess:
@@ -217,9 +230,10 @@ class TestDistillWithLLMSuccess:
         ):
             mock_config = MagicMock()
             mock_get_config.return_value = mock_config
-            result = store._distill(long_text, "test-doc")
+            text, failed = store._distill(long_text, "test-doc")
 
-        assert result == "Distilled summary of key facts"
+        assert text == "Distilled summary of key facts"
+        assert failed is False
         mock_llm.call.assert_called_once()
 
 
@@ -291,3 +305,115 @@ class TestSeeWithAndWithoutRaw:
         entry = store.store.get(result.entry_id)
         assert entry is not None
         assert entry.text == small_content
+
+
+class TestIngestResultDistillFailed:
+    def test_see_small_file_distill_not_failed(self, tmp_path: Path) -> None:
+        small_content = "Small content"
+        md_file = tmp_path / "small.md"
+        md_file.write_text(small_content, encoding="utf-8")
+
+        store = ScribeStore(tmp_path / "wiki")
+        result = store.see(str(md_file))
+
+        assert result.distill_failed is False
+
+    def test_see_large_file_without_llm_sets_distill_failed(self, tmp_path: Path) -> None:
+        large_content = "x" * (MAX_DISTILL_SIZE + 50)
+        md_file = tmp_path / "big.md"
+        md_file.write_text(large_content, encoding="utf-8")
+
+        store = ScribeStore(tmp_path / "wiki")
+
+        with (
+            patch("village.config.get_config") as mock_get_config,
+            patch("village.llm.factory.get_llm_client", side_effect=RuntimeError("LLM unavailable")),
+        ):
+            result = store.see(str(md_file))
+
+        assert result.status == "success"
+        assert result.distill_failed is True
+
+    def test_see_large_file_with_llm_success_distill_not_failed(self, tmp_path: Path) -> None:
+        large_content = "x" * (MAX_DISTILL_SIZE + 50)
+        md_file = tmp_path / "big.md"
+        md_file.write_text(large_content, encoding="utf-8")
+
+        store = ScribeStore(tmp_path / "wiki")
+
+        with (
+            patch("village.config.get_config") as mock_get_config,
+            patch("village.llm.factory.get_llm_client") as mock_get_llm,
+        ):
+            mock_config = MagicMock()
+            mock_get_config.return_value = mock_config
+            mock_llm = MagicMock()
+            mock_llm.call.return_value = "Distilled key insights"
+            mock_get_llm.return_value = mock_llm
+
+            result = store.see(str(md_file))
+
+        assert result.status == "success"
+        assert result.distill_failed is False
+
+    def test_see_raw_flag_distill_not_failed(self, tmp_path: Path) -> None:
+        large_content = "x" * (MAX_DISTILL_SIZE + 50)
+        md_file = tmp_path / "big.md"
+        md_file.write_text(large_content, encoding="utf-8")
+
+        store = ScribeStore(tmp_path / "wiki")
+        result = store.see(str(md_file), raw=True)
+
+        assert result.status == "success"
+        assert result.distill_failed is False
+
+
+class TestSeeFileMoveError:
+    def test_oserror_on_move_logged(self, tmp_path: Path, caplog) -> None:
+        store = ScribeStore(tmp_path / "wiki")
+        store._ensure_dirs()
+
+        ingest_file = store.ingest_dir / "readme.md"
+        ingest_file.write_text("# Readme\nProject readme content", encoding="utf-8")
+
+        with patch("pathlib.Path.rename", side_effect=OSError("Permission denied")):
+            with caplog.at_level(logging.WARNING):
+                result = store.see(str(ingest_file))
+
+        assert result.status == "success"
+        assert any("Failed to move" in rec.message for rec in caplog.records)
+
+
+class TestExtractUrlFallbackWarning:
+    def test_trafilatura_none_logs_warning(self, tmp_path: Path, caplog) -> None:
+        store = ScribeStore(tmp_path / "wiki")
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>raw</body></html>"
+        mock_response.raise_for_status = MagicMock()
+
+        with (
+            patch("httpx.get", return_value=mock_response),
+            patch("trafilatura.bare_extraction", return_value=None),
+            caplog.at_level(logging.WARNING),
+        ):
+            title, text = store._extract_url("https://example.com")
+
+        assert title == "https://example.com"
+        assert text == "<html><body>raw</body></html>"
+        assert any(
+            "Trafilatura extraction failed" in rec.message for rec in caplog.records
+        )
+
+
+class TestAskSuccessfulNoError:
+    def test_ask_with_matches_has_no_error(self, tmp_path: Path) -> None:
+        elder = ScribeStore(tmp_path / "wiki")
+
+        md = tmp_path / "auth.md"
+        md.write_text("# Auth\nConfigure tokens", encoding="utf-8")
+        elder.see(str(md))
+
+        result = elder.ask("auth")
+
+        assert result.error == ""
+        assert len(result.sources) >= 1
