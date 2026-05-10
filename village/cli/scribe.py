@@ -13,21 +13,12 @@ from village.scribe.store import ScribeStore
 logger = logging.getLogger(__name__)
 
 
-def _get_ollama_url() -> str:
-    """Get Ollama embedding URL from environment.
-
-    Checks VILLAGE_EMBED_URL first (explicit), then falls back to OLLAMA_BASE_URL.
-    Returns empty string if neither is set — semantic search will be disabled.
-    """
-    import os
-
-    return os.environ.get("VILLAGE_EMBED_URL", "") or os.environ.get("OLLAMA_BASE_URL", "")
-
-
 def _make_store(wiki_path: Path) -> ScribeStore:
-    """Create a ScribeStore with optional embedding support."""
-    ollama_url = _get_ollama_url()
-    return ScribeStore(wiki_path, ollama_url=ollama_url)
+    """Create a ScribeStore with optional embedding support from config."""
+    from village.config import get_config
+
+    config = get_config()
+    return ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model)
 
 
 def _find_wiki_path() -> Path:

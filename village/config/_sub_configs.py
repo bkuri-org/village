@@ -241,6 +241,8 @@ class MemoryConfig:
 
     enabled: bool = False
     store_path: str = ".village/memory/"
+    ollama_url: str = ""
+    embed_model: str = ""
 
     @classmethod
     def from_env_and_config(cls, config: dict[str, str]) -> "MemoryConfig":
@@ -253,7 +255,23 @@ class MemoryConfig:
             os.environ.get("VILLAGE_MEMORY_PATH") or config.get("memory.store_path") or config.get("MEMORY.STORE_PATH"),
             ".village/memory/",
         )
-        return cls(enabled=_parse_bool(enabled_raw, default=False), store_path=store_path)
+        ollama_url = (
+            os.environ.get("VILLAGE_EMBED_URL", "")
+            or os.environ.get("OLLAMA_BASE_URL", "")
+            or config.get("memory.ollama_url", "")
+            or config.get("MEMORY.OLLAMA_URL", "")
+        )
+        embed_model = (
+            os.environ.get("VILLAGE_EMBED_MODEL", "")
+            or config.get("memory.embed_model", "")
+            or config.get("MEMORY.EMBED_MODEL", "")
+        )
+        return cls(
+            enabled=_parse_bool(enabled_raw, default=False),
+            store_path=store_path,
+            ollama_url=ollama_url,
+            embed_model=embed_model,
+        )
 
 
 @dataclass
