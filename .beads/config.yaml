@@ -61,3 +61,4 @@
 # - github.org
 # - github.repo
 no-db: true
+issue-prefix: village
