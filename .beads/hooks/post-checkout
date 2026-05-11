@@ -1,4 +1,7 @@
 #!/usr/bin/env sh
+# Check backend consistency before beads runs (prevents silent data loss)
+_HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$_HOOK_DIR/_check-backend-consistency.sh" ] && . "$_HOOK_DIR/_check-backend-consistency.sh"
 # --- BEGIN BEADS INTEGRATION v1.0.4 ---
 # This section is managed by beads. Do not remove these markers.
 if command -v bd >/dev/null 2>&1; then
