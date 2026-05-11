@@ -144,12 +144,14 @@ class ScribeStore:
         wiki_path: Path,
         ollama_url: str = "",
         embed_model: str = "",
+        min_similarity: float = 0.0,
     ) -> None:
         self.wiki_path = wiki_path
         self.ingest_dir = wiki_path / "ingest"
         self.processed_dir = wiki_path / "processed"
         self.pages_dir = wiki_path / "pages"
         self.log_path = wiki_path / "log.md"
+        self.min_similarity = min_similarity
         self.store = MemoryStore(wiki_path / "pages", ollama_url=ollama_url, embed_model=embed_model)
 
     def _ensure_dirs(self) -> None:
@@ -280,7 +282,7 @@ class ScribeStore:
         Uses semantic search (embedding similarity) when an Ollama URL
         is configured, otherwise falls back to keyword substring search.
         """
-        hits = self.store.find_semantic(question, k=5)
+        hits = self.store.find_semantic(question, k=5, min_similarity=self.min_similarity)
 
         if not hits:
             entry_count = len(self.store.all_entries())

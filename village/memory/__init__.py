@@ -255,11 +255,19 @@ class MemoryStore:
         results.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in results[:k]]
 
-    def find_semantic(self, query: str, k: int = 5) -> list[MemoryEntry]:
+    def find_semantic(
+        self, query: str, k: int = 5, min_similarity: float = 0.0
+    ) -> list[MemoryEntry]:
         """Semantic search using embedding cosine similarity.
 
         Falls back to keyword search if embeddings are unavailable.
         Returns entries sorted by semantic relevance.
+
+        Args:
+            query: The search text.
+            k: Number of results to return.
+            min_similarity: Minimum cosine similarity (0.0–1.0).
+                Results below this threshold are filtered out.
         """
         if self._embed_cache is None:
             logger.debug("Semantic search requested but no embedding cache configured")
@@ -272,7 +280,7 @@ class MemoryStore:
         entry_ids = [e.id for e in all_entries]
         entry_map = {e.id: e for e in all_entries}
 
-        ranked = self._embed_cache.find(query, entry_ids, k=k)
+        ranked = self._embed_cache.find(query, entry_ids, k=k, min_similarity=min_similarity)
         if not ranked:
             logger.debug("No embedding results — falling back to keyword search")
             return self.find(query, k=k)

@@ -140,6 +140,65 @@ class TestFindReturnsRanked:
         assert scores[0] >= scores[1] >= scores[2]
 
 
+class TestSimilarityThreshold:
+    """Tests for min_similarity filtering in EmbeddingCache.find()."""
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_filters_low_similarity_results(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        query_emb = [1.0, 0.0]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [query_emb]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        # Orthogonal entry — similarity ~0.0
+        cache.put("ortho", [0.0, 1.0])
+        # Identical entry — similarity ~1.0
+        cache.put("match", [1.0, 0.0])
+
+        results = cache.find("query", ["ortho", "match"], k=5, min_similarity=0.5)
+
+        assert len(results) == 1
+        assert results[0][0] == "match"
+        assert results[0][1] >= 0.5
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_default_threshold_returns_all(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        query_emb = [1.0, 0.0]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [query_emb]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put("ortho", [0.0, 1.0])
+        cache.put("match", [1.0, 0.0])
+
+        # Default min_similarity=0.0 returns everything
+        results = cache.find("query", ["ortho", "match"], k=5)
+
+        assert len(results) == 2
+
+    @patch("village.memory.embeddings.httpx.post")
+    def test_high_threshold_filters_everything(self, mock_post: MagicMock, tmp_path: Path) -> None:
+        query_emb = [1.0, 0.0]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embeddings": [query_emb]}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        cache = EmbeddingCache(cache_path=tmp_path / "embeddings.json")
+        cache.put("partial", [0.7, 0.7])  # similarity < 1.0
+
+        results = cache.find("query", ["partial"], k=5, min_similarity=0.99)
+
+        assert len(results) == 0
+
+
 class TestFindNoCandidates:
     @patch("village.memory.embeddings.httpx.post")
     def test_no_cached_embeddings_returns_empty(self, mock_post: MagicMock, tmp_path: Path) -> None:
@@ -614,7 +673,7 @@ class TestScribeAskUsesSemanticWhenConfigured:
         # Mock find_semantic on the underlying MemoryStore
         with patch.object(elder.store, "find_semantic", wraps=elder.store.find_semantic) as spy:
             elder.ask("auth")
-            spy.assert_called_once_with("auth", k=5)
+            spy.assert_called_once_with("auth", k=5, min_similarity=0.0)
 
     def test_ask_returns_semantic_results(self, tmp_path: Path) -> None:
         elder = ScribeStore(tmp_path / "wiki", ollama_url="http://localhost:11434")
