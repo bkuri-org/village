@@ -285,10 +285,13 @@ class MemoryStore:
         return results[:k]
 
     def rebuild_embeddings(self) -> int:
-        """Rebuild the embedding cache for all existing entries.
+        """Rebuild the embedding cache from scratch for all existing entries.
 
-        Returns the number of entries successfully embedded.
+        Stores content fingerprints for subsequent staleness detection.
         Requires ollama_url to be configured in __init__.
+
+        Returns:
+            Number of entries successfully embedded.
         """
         if self._embed_cache is None:
             logger.warning("Cannot rebuild embeddings — no Ollama URL configured")
@@ -296,6 +299,23 @@ class MemoryStore:
 
         entries = {e.id: f"{e.title}\n{e.text}" for e in self.all_entries()}
         return self._embed_cache.rebuild(entries)
+
+    def sync_embeddings(self) -> int:
+        """Sync embedding cache with current entries.
+
+        Incrementally updates: re-embeds entries whose content changed,
+        embeds new entries, and removes orphaned embeddings for deleted entries.
+        Requires ollama_url to be configured in __init__.
+
+        Returns:
+            Number of entries embedded or re-embedded.
+        """
+        if self._embed_cache is None:
+            logger.warning("Cannot sync embeddings — no Ollama URL configured")
+            return 0
+
+        entries = {e.id: f"{e.title}\n{e.text}" for e in self.all_entries()}
+        return self._embed_cache.sync(entries)
 
     def recent(self, limit: int = 10) -> list[MemoryEntry]:
         """Get most recent entries by created timestamp."""
