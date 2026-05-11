@@ -114,7 +114,7 @@ def status(
     if wiki:
         wiki_path = _find_wiki_path()
         config = get_config()
-        store = ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model)
+        store = ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model, min_similarity=config.memory.min_similarity)
 
         entries = store.store.all_entries()
         log_path = wiki_path / "log.md"
@@ -507,7 +507,7 @@ def monitor(interval: int) -> None:
 
     wiki_path = _find_wiki_path()
     config = get_config()
-    store = ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model)
+    store = ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model, min_similarity=config.memory.min_similarity)
     mon = Monitor(wiki_path, store, poll_interval=interval)
 
     click.echo(f"Monitoring {wiki_path / 'ingest'} every {interval}s (Ctrl+C to stop)")

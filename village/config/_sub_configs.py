@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-from village.config._helpers import _env_or_config, _parse_bool, _parse_int, _parse_str
+from village.config._helpers import _env_or_config, _parse_bool, _parse_float, _parse_int, _parse_str
 
 
 @dataclass
@@ -263,6 +263,7 @@ class MemoryConfig:
     store_path: str = ".village/memory/"
     ollama_url: str = ""
     embed_model: str = ""
+    min_similarity: float = 0.0
 
     @classmethod
     def from_env_and_config(cls, config: dict[str, str]) -> "MemoryConfig":
@@ -286,11 +287,18 @@ class MemoryConfig:
             or config.get("memory.embed_model", "")
             or config.get("MEMORY.EMBED_MODEL", "")
         )
+        min_similarity = _parse_float(
+            os.environ.get("VILLAGE_MIN_SIMILARITY", "")
+            or config.get("memory.min_similarity", "")
+            or config.get("MEMORY.MIN_SIMILARITY", ""),
+            0.0,
+        )
         return cls(
             enabled=_parse_bool(enabled_raw, default=False),
             store_path=store_path,
             ollama_url=ollama_url,
             embed_model=embed_model,
+            min_similarity=min_similarity,
         )
 
 

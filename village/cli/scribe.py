@@ -18,7 +18,7 @@ def _make_store(wiki_path: Path) -> ScribeStore:
     from village.config import get_config
 
     config = get_config()
-    return ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model)
+    return ScribeStore(wiki_path, ollama_url=config.memory.ollama_url, embed_model=config.memory.embed_model, min_similarity=config.memory.min_similarity)
 
 
 def _find_wiki_path() -> Path:

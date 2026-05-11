@@ -1,12 +1,29 @@
 """Embedding cache backed by Ollama + numpy cosine similarity.
 
-Persists embeddings as a JSON file alongside the wiki. Falls back gracefully
-to keyword search when Ollama is unavailable. No heavy dependencies — just
-numpy for vector math and httpx (already in the project) for Ollama calls.
+Provides semantic search for the Village wiki by computing text embeddings
+via Ollama's ``/api/embed`` endpoint and ranking candidates by cosine
+similarity.  No heavy dependencies — just numpy for vector math and httpx
+(already in the project) for Ollama calls.
 
-Storage layout:
-    <store_path>/
-    └── embeddings.json   # {entry_id: [float, ...]}
+**Storage layout** (inside the wiki ``pages/`` directory):
+
+    pages/
+    └── embeddings.json   # {entry_id: {"v": [float...], "h": "sha256_prefix"}}
+
+**Content fingerprinting** — each cached entry stores a SHA-256 prefix
+of the original text.  On :py:meth:`EmbeddingCache.sync`, entries whose
+hash has changed are re-embedded, and orphaned entries (deleted from the
+wiki) are pruned.  Legacy caches without hashes are auto-migrated on load.
+
+**Public API**:
+
+- :py:meth:`EmbeddingCache.put_text` — embed text and cache with fingerprint
+- :py:meth:`EmbeddingCache.find` — semantic search with optional similarity threshold
+- :py:meth:`EmbeddingCache.sync` — incremental update (new + stale + prune)
+- :py:meth:`EmbeddingCache.rebuild` — full cache rebuild from scratch
+- :py:meth:`EmbeddingCache.available` — Ollama health check
+- :py:meth:`EmbeddingCache.remove` — delete a cached embedding
+- :py:meth:`EmbeddingCache.stale` / :py:meth:`EmbeddingCache.missing` — introspection
 """
 
 import hashlib
@@ -40,11 +57,29 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 class EmbeddingCache:
-    """Manages embedding vectors for wiki entries.
+    """Manages embedding vectors for wiki entries with content fingerprinting.
 
-    Embeddings are computed via Ollama's /api/embed endpoint and cached
-    in a JSON file. On query, cosine similarity ranks entries by semantic
-    relevance.
+    Embeddings are computed via Ollama's ``/api/embed`` endpoint and cached
+    in a JSON file.  Each entry stores both the vector and a SHA-256 fingerprint
+    of the source text, enabling incremental sync to detect stale embeddings
+    when content changes.
+
+    Usage::
+
+        cache = EmbeddingCache(
+            cache_path=wiki_path / "pages" / "embeddings.json",
+            ollama_url="http://llm.lan:11434",
+            model="nomic-embed-text",
+        )
+
+        # Embed a new entry
+        cache.put_text("entry-001", "Some wiki content")
+
+        # Semantic search
+        results = cache.find("search query", entry_ids=["entry-001", "entry-002"], k=5, min_similarity=0.3)
+
+        # Incremental sync (re-embed changed, embed new, prune deleted)
+        cache.sync({"entry-001": "updated content", "entry-003": "new content"})
     """
 
     def __init__(
@@ -183,6 +218,7 @@ class EmbeddingCache:
         query: str,
         entry_ids: list[str],
         k: int = 5,
+        min_similarity: float = 0.0,
     ) -> list[tuple[str, float]]:
         """Find top-k entries by cosine similarity to query.
 
@@ -190,6 +226,8 @@ class EmbeddingCache:
             query: The search text.
             entry_ids: Candidate entry IDs to search among.
             k: Number of results to return.
+            min_similarity: Minimum cosine similarity score (0.0–1.0).
+                Results below this threshold are filtered out.
 
         Returns:
             List of (entry_id, similarity_score) tuples, sorted descending.
@@ -223,7 +261,7 @@ class EmbeddingCache:
             key=lambda x: x[1],
             reverse=True,
         )
-        return indexed[:k]
+        return [(eid, score) for eid, score in indexed if score >= min_similarity][:k]
 
     def rebuild(self, entries: dict[str, str]) -> int:
         """Rebuild embedding cache from scratch for all entries.

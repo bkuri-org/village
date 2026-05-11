@@ -77,3 +77,27 @@ class TestMemoryConfigEmbedSettings:
         config = MemoryConfig.from_env_and_config({})
         assert config.ollama_url == "http://llm.lan:11434"
         assert config.embed_model == "nomic-embed-text"
+
+    def test_min_similarity_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default min_similarity is 0.0 (no filtering)."""
+        monkeypatch.delenv("VILLAGE_MIN_SIMILARITY", raising=False)
+        config = MemoryConfig.from_env_and_config({})
+        assert config.min_similarity == 0.0
+
+    def test_min_similarity_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VILLAGE_MIN_SIMILARITY env var sets the threshold."""
+        monkeypatch.setenv("VILLAGE_MIN_SIMILARITY", "0.3")
+        config = MemoryConfig.from_env_and_config({})
+        assert config.min_similarity == 0.3
+
+    def test_min_similarity_from_config_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Config dict memory.min_similarity is used when env var not set."""
+        monkeypatch.delenv("VILLAGE_MIN_SIMILARITY", raising=False)
+        config = MemoryConfig.from_env_and_config({"memory.min_similarity": "0.5"})
+        assert config.min_similarity == 0.5
+
+    def test_min_similarity_legacy_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Legacy MEMORY.MIN_SIMILARITY key also works."""
+        monkeypatch.delenv("VILLAGE_MIN_SIMILARITY", raising=False)
+        config = MemoryConfig.from_env_and_config({"MEMORY.MIN_SIMILARITY": "0.7"})
+        assert config.min_similarity == 0.7
