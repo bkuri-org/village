@@ -24,7 +24,7 @@ def tasks() -> None:
 @click.option("--json", "json_output", is_flag=True, help="JSON output")
 def list_tasks(
     status: str | None,
-    type: str | None,
+    issue_type: str | None,
     label: str | None,
     project_filter: str | None,
     limit: int,
@@ -35,7 +35,7 @@ def list_tasks(
         store = get_task_store()
         result = store.list_tasks(
             status=status,
-            issue_type=type,
+            issue_type=issue_type,
             label=label,
             limit=limit,
         )
@@ -121,7 +121,7 @@ def show(task_id: str, json_output: bool) -> None:
 def create(
     title: str,
     description: str,
-    type: str,
+    issue_type: str,
     priority: int,
     label: tuple[str, ...],
     depends_on: tuple[str, ...],
@@ -135,7 +135,7 @@ def create(
     spec = TaskCreate(
         title=title,
         description=description,
-        issue_type=type,
+        issue_type=issue_type,
         priority=priority,
         labels=list(label),
         depends_on=list(depends_on),
@@ -360,6 +360,7 @@ def search(query: str, status: str | None, limit: int, json_output: bool) -> Non
 
 
 @tasks.command()
+@click.option("--status", type=str, default=None, help="Filter by status")
 @click.option("--json", "json_output", is_flag=True, help="JSON output")
 def count(status: str | None, json_output: bool) -> None:
     """Count tasks."""
