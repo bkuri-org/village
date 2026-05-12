@@ -2,7 +2,7 @@
 # Check backend consistency before beads runs (prevents silent data loss)
 _HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$_HOOK_DIR/_check-backend-consistency.sh" ] && . "$_HOOK_DIR/_check-backend-consistency.sh"
-# --- BEGIN BEADS INTEGRATION v1.0.4 ---
+# --- BEGIN BEADS INTEGRATION v1.0.3 ---
 # This section is managed by beads. Do not remove these markers.
 if command -v bd >/dev/null 2>&1; then
   export BD_GIT_HOOK=1
@@ -24,4 +24,4 @@ if command -v bd >/dev/null 2>&1; then
   fi
   if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
 fi
-# --- END BEADS INTEGRATION v1.0.4 ---
+# --- END BEADS INTEGRATION v1.0.3 ---
