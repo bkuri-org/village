@@ -17,7 +17,7 @@ def tasks() -> None:
 
 @tasks.command(name="list")
 @click.option("--status", type=str, default=None, help="Filter by status")
-@click.option("--type", "issue_type", default=None, help="Filter by issue type")
+@click.option("--type", "type", default=None, help="Filter by issue type")
 @click.option("--label", type=str, default=None, help="Filter by label")
 @click.option("--project", "project_filter", default=None, help="Filter by project label")
 @click.option("--limit", type=int, default=50, help="Max tasks to show")
@@ -111,7 +111,7 @@ def show(task_id: str, json_output: bool) -> None:
 @tasks.command()
 @click.argument("title")
 @click.option("--description", "-d", default="", help="Task description")
-@click.option("--type", "issue_type", default="task", help="Issue type (bug|feature|task|epic|chore)")
+@click.option("--type", "type", default="task", help="Issue type (bug|feature|task|epic|chore)")
 @click.option("--priority", "-p", type=int, default=2, help="Priority (0-4, 0=critical)")
 @click.option("--label", "-l", multiple=True, help="Labels (can specify multiple)")
 @click.option("--depends-on", multiple=True, help="Task IDs this depends on")
